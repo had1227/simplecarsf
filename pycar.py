@@ -7,7 +7,6 @@ import numpy as np
 #from rrt_star import rrt_star
 from car_model import Car2
 
-
 # Define some colors
 BLACK = (0,   0,   0)
 WHITE = (255, 255, 255)
@@ -16,7 +15,6 @@ RED = (255,   0,   0)
 BLUE = (0,   0, 255)
 
 PI = math.pi
-
 
 def updateSteering(screen, car):
     pygame.draw.arc(screen, GREEN, [20, 20, 250, 200], PI / 4, 3 * PI / 4, 5)
@@ -164,7 +162,7 @@ class env():
 
         for obs in self.obstacles:
             obs.gear = 'D'
-            obs.speed = 5*random.random()
+            obs.speed = random.uniform(10,20)
             obs.constant_speed = True
 
         self.obs_state1 = [(obs.pose[0], obs.pose[1]) for obs in self.obstacles]

@@ -6,7 +6,6 @@ import numpy as np
 
 #from rrt_star import rrt_star
 from car_model import Car2
-from lane_following import CurvedRoad
 
 
 # Define some colors

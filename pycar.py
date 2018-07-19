@@ -127,15 +127,13 @@ class laneFollowingCar1(Car2):
         self.car.constant_speed = True
         self.car.speed = 100
 
-class spec():
-    def __init__(self):
-        self.timestep_limit = 300
-
 class env():
     def __init__(self, visualize=False):
 
         self.visualize = visualize
         self.size = (1400, 600)
+
+        self.obs_num = 0
 
         if visualize:
             # Initialize the game engine
@@ -158,24 +156,27 @@ class env():
         self.car = Car2(RED, self.start[0], self.start[1], self.screen)
         self.car.speed = 0
 
-        self.obstacles = [Car2(GREEN, random.uniform(200*(i+1),200*(i+2)), random.uniform(300,500),self.screen) for i in range(4)]
+        if self.obs_num!=0:
+        
+            self.obstacles = [Car2(GREEN, random.uniform(200*(i+1),200*(i+2)), random.uniform(300,500),self.screen) for i in range(4)]
 
-        for obs in self.obstacles:
-            obs.gear = 'D'
-            obs.speed = random.uniform(10,20)
-            obs.constant_speed = True
+            for obs in self.obstacles:
+                obs.gear = 'D'
+                obs.speed = random.uniform(10,20)
+                obs.constant_speed = True
 
-        self.obs_state1 = [(obs.pose[0], obs.pose[1]) for obs in self.obstacles]
-        self.obs_state2 = [obs.speed for obs in self.obstacles]
-        self.obs_state = tuple([x for a in self.obs_state1 for x in a] + self.obs_state2)
+            self.obs_state1 = [(obs.pose[0], obs.pose[1]) for obs in self.obstacles]
+            self.obs_state2 = [obs.speed for obs in self.obstacles]
+            self.obs_state = tuple([x for a in self.obs_state1 for x in a] + self.obs_state2)
+        
+        self.state = tuple([0.1*ss for ss in self.car.initial_state[:2]]) + self.car.initial_state[2:] + self.goal
+        self.state += self.obs_state if self.obs_num!=0 else ()
 
-        self.state = self.car.initial_state + self.goal + self.obs_state
+        self.bound = 20
+        self.observation_space = len(self.state)
+        self.action_space = 25
 
-        self.bound = 50
-        self.observation_space = np.zeros(9)
-        self.action_space = np.zeros(2)
-
-        self.spec = spec()
+        self.time_limit = 200
         self.t = 0
 
         #self.path_planner = rrt_star(self.screen, self.size, self.bound, self.visualize)
@@ -196,16 +197,19 @@ class env():
         for i in range(4):
             speed = 10*random.random()
             start_line = 325+50*random.randrange(4)+random.uniform(-5,5)
-            self.obstacles[i].initial_state = (random.uniform(200*(i+1)+100,200*(i+1)+200), start_line,0,0,speed,0,speed)
-            self.obstacles[i].gear="D"
-            self.obstacles[i].constant_speed = True
-            self.obstacles[i].reset()
-
-        self.obs_state1 = [(obs.pose[0], obs.pose[1]) for obs in self.obstacles]
-        self.obs_state2 = [obs.speed for obs in self.obstacles]
-        self.obs_state = tuple([x for a in self.obs_state1 for x in a] + self.obs_state2)
-
-        self.state = self.car.initial_state + self.goal + self.obs_state
+            if self.obs_num!=0:
+                self.obstacles[i].initial_state = (random.uniform(200*(i+1)+100,200*(i+1)+200), start_line,0,0,speed,0,speed)
+                self.obstacles[i].gear="D"
+                self.obstacles[i].constant_speed = True
+                self.obstacles[i].reset()
+            
+        if self.obs_num!=0:
+            self.obs_state1 = [(obs.pose[0], obs.pose[1]) for obs in self.obstacles]
+            self.obs_state2 = [obs.speed for obs in self.obstacles]
+            self.obs_state = tuple([x for a in self.obs_state1 for x in a] + self.obs_state2)
+        
+        self.state = tuple([0.1*ss for ss in self.car.initial_state[:2]]) + self.car.initial_state[2:] + self.goal
+        self.state += self.obs_state if self.obs_num!=0 else ()
 
         self.reward = 0
         self.done = False
@@ -217,9 +221,12 @@ class env():
         return self.state
 
     def step(self, action):
+        """
         steer = min(1, max(action[0], -1))
         accel = min(1, max(action[1], -1))
-
+        """
+        steer = 0.5*((action/5)-2)
+        accel = 0.5*((action%5)-2)
         self.car.turn(steer)
         self.car.accelerate(accel)
 
@@ -231,8 +238,9 @@ class env():
         rate = 10
         self.car.update(1 / rate)
 
-        for obs in self.obstacles:
-            obs.update(1 / rate)
+        if self.obs_num!=0:
+            for obs in self.obstacles:
+                obs.update(1 / rate)
 
         if self.visualize:
             updateSteering(self.screen, self.car)
@@ -244,15 +252,15 @@ class env():
 
             # --- Limit to 60 frames per second
             self.clock.tick(rate)
-
+        """
         self.obs_state1 = [(obs.pose[0], obs.pose[1]) for obs in self.obstacles]
         self.obs_state2 = [obs.speed for obs in self.obstacles]
         self.obs_state = tuple([x for a in self.obs_state1 for x in a] + self.obs_state2)
-
+        """
         self.state = (self.car.pose[0], self.car.pose[1], self.car.angle, self.car.steering_angle,
                              self.car.vel[0], self.car.vel[1], self.car.speed, self.goal[0], self.goal[1])
 
-        self.state = self.state + self.obs_state
+        self.state = self.state #+ self.obs_state
 
         self.done, self.reward, _ = self.reward_check()
         self.t += 1
@@ -260,7 +268,13 @@ class env():
         return self.state, self.reward, self.done, 0
 
     def collision_check(self):
-        collision = [self.car.rect.colliderect(obs.rect) for obs in self.obstacles]
+        if self.obs_num ==0:
+            return False
+
+        if self.visualize:
+            collision = [self.car.rect.colliderect(obs.rect) for obs in self.obstacles]
+        else:
+            collision = [self.dist(self.car.pose,obs.pose)<self.bound for obs in self.obstacles]
 
         return any(collision)
 
@@ -268,19 +282,19 @@ class env():
         if self.done:
             return True, 0, 'done'
         elif self.collision_check():
-            return True, -1, 'collision'
+            return True, -100, 'collision'
         elif(self.car.pose[0]<0 or self.car.pose[0]>1400):
-            return True, -1, 'out of range'
+            return True, -10, 'out of range'
         elif(self.car.pose[1]<300 or self.car.pose[1]>500):
-            return False, -1, 'out of range'
-        elif(self.t >= self.spec.timestep_limit):
-            return True, -1, 'time out'
+            return False, -10, 'out of range'
+        elif(self.t >= self.time_limit):
+            return True, -10, 'time out'
         else:
             goal_dist = self.dist(self.car.pose, self.goal)
             if goal_dist<self.bound:
-                return True, 1, 'reached'
+                return True, 100, 'reached'
             else:
-                return False, 0, 'on going'
+                return False, -0.001*goal_dist, 'on going'
 
     def get_reward(self):
         goal_dist = self.dist(self.car.pose, self.goal)
@@ -337,8 +351,10 @@ if __name__ == "__main__":
     new_env = env(visualize=True)
     new_env.reset()
     speed = 1
-    for i in range(1000):
-        new_env.step((0,speed*0.5))
+    for i in range(10):
+        new_env.step(4)
+    for i in range(10):
+        new_env.step(0)
     a=input()
     '''
     total_time = 0

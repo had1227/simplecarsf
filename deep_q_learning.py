@@ -2,6 +2,8 @@ import random
 import numpy as np
 import tensorflow as tf
 import pycar
+import spmax
+import scipy
 
 from collections import deque
 
@@ -184,12 +186,14 @@ class DQNAgent:
                 out = tf.layers.dense(out, self.n_action,
                                   kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_out')
                 self.q_predict = tf.contrib.sparsemax.sparsemax(out/self.q_alpha, name='q_predict')
-                self.q_sample = tf.multinomial(self.q_predict)
+                self.q_dist = tf.distributions.Multinomial([1.], probs=self.q_predict)
+                self.q_sample = self.q_dist.sample()
             elif self.policy_mode=='softmax':
                 out = tf.layers.dense(out, self.n_action,
                                   kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_out')
                 self.q_predict = tf.nn.softmax(out/self.q_alpha, name='q_predict')
-                self.q_sample = tf.multinomial(self.q_predict,1)
+                self.q_dist = tf.distributions.Multinomial([1.], probs=self.q_predict)
+                self.q_sample = self.q_dist.sample()
                         
         with tf.variable_scope('q_func_old'):
             out = tf.layers.dense(self.obs_ph, hid1_size, tf.tanh,
@@ -203,10 +207,12 @@ class DQNAgent:
                 out = tf.layers.dense(out, self.n_action,
                                   kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_out')
                 self.q_predict_old = tf.contrib.sparsemax.sparsemax(out/self.q_alpha, name='q_predict')
+                self.q_dist_old = tf.distributions.Multinomial([1.], probs=self.q_predict_old)
             elif self.policy_mode=='softmax':
                 out = tf.layers.dense(out, self.n_action,
                                   kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_out')
                 self.q_predict_old = tf.nn.softmax(out/self.q_alpha, name='q_predict')
+                self.q_dist = tf.distributions.Multinomial([1.], probs=self.q_predict_old)
         
         self.weights = tf.trainable_variables(scope='q_func')
         self.weights_old = tf.trainable_variables(scope='q_func_old')
@@ -270,10 +276,10 @@ class DQNAgent:
             return np.argmax(q_value[0])
         elif self.policy_mode=='spmax':
             q_sample_val = self.sess.run(self.q_sample,feed_dict={self.obs_ph:[obs]})
-            return q_sample_val[0]
+            return np.argmax(q_sample_val[0])
         elif self.policy_mode=='softmax':
             q_sample_val = self.sess.run(self.q_sample,feed_dict={self.obs_ph:[obs]})
-            return q_sample_val[0]
+            return np.argmax(q_sample_val[0])
 
     def add_experience(self, obs, action, reward, next_obs, done):
         if self.memory_mode == 'PER':
@@ -313,6 +319,7 @@ class DQNAgent:
             target = self.get_prediction(observations)
             if self.target_mode == 'DDQN':
                 bast_a = np.argmax(self.get_prediction(next_observations),axis=1)
+
             next_q_value = self.get_prediction_old(next_observations)
 
             # BELLMAN UPDATE RULE 
@@ -323,7 +330,12 @@ class DQNAgent:
                     if self.target_mode == 'DDQN':
                         target[i][actions[i]] = rewards[i] + self.discount_factor * next_q_value[i][bast_a[i]]
                     else:
-                        target[i][actions[i]] = rewards[i] + self.discount_factor * (np.amax(next_q_value[i]))
+                        if self.policy_mode=='argmax':
+                            target[i][actions[i]] = rewards[i] + self.discount_factor * (np.amax(next_q_value[i]))
+                        elif self.policy_mode=='spmax':
+                            target[i][actions[i]] = rewards[i] + self.discount_factor * self.alpha * spmax.spmax(next_q_value[i])
+                        elif self.policy_mode=='softmax':
+                            target[i][actions[i]] = rewards[i] + self.discount_factor * self.alpha * scipy.misc.logsumexp(next_q_value[i])
 
             loss, errors, _ = self.sess.run([self.loss, self.errors, self.optim], 
                                  feed_dict={self.obs_ph:observations,self.target_ph:target,self.learning_rate_ph:self.learning_rate,self.batch_weights_ph:batch_weights})
@@ -344,12 +356,14 @@ mode = ['train','test']
 cur_mode = 'train'
 
 max_t = env.time_limit
-agent = DQNAgent(env.observation_space,env.action_space,memory_mode='PER',target_mode='DDQN', policy_mode='softmax',
+agent = DQNAgent(env.observation_space,env.action_space,memory_mode='PER',target_mode='DDQN', policy_mode='argmax',
                 restore=False, net_dir='q_learning_iter_9900.ckpt') # memory_mode='PER',target_mode='DDQN'
 
 avg_return_list = deque(maxlen=100)
 avg_loss_list = deque(maxlen=100)
 avg_success_list = deque(maxlen=100)
+
+result_saver = []
 
 for i in range(10000):
     obs = env.reset()
@@ -363,7 +377,6 @@ for i in range(10000):
             next_obs, reward, done, info = env.step(action)
         else:
             action = agent.get_action(obs)
-            print (action)
             next_obs, reward, done, info = env.step(action)
             agent.add_experience(obs,action,reward,next_obs,done)
         
@@ -381,7 +394,8 @@ for i in range(10000):
             break
     
     if cur_mode != 'test':
-        agent.update_target()
+        if (i%4)==0:
+            agent.update_target()
         if (i%100)==0:
             agent.saver.save(agent.sess, "./net/q_learning_iter_{}.ckpt".format(i))
 
@@ -397,5 +411,7 @@ for i in range(10000):
         break
     
     if (i%100)==0:
+        result_saver.append({'i':i,'loss':np.mean(avg_loss_list),'return':np.mean(avg_return_list),'success':np.mean(avg_success_list),'eps':agent.epsilon})
+        np.save('result.npy',result_saver)
         print('{} loss : {:.3f}, return : {:.3f}, success : {:.3f}, eps : {:.3f}'.format(i, np.mean(avg_loss_list), np.mean(avg_return_list), np.mean(avg_success_list), agent.epsilon))
 

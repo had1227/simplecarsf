@@ -97,7 +97,7 @@ def updateSpeedometer(screen, car):
     # Put the image of the gear_text on the screen
     screen.blit(gear_text, [300, 40])
 
-    speed_text = font.render("Speed: " + str(car.speed / 5), True, BLACK)
+    speed_text = font.render("Speed: " + str(int(car.speed)/10), True, BLACK)
     screen.blit(speed_text, [300, 60])
 
 
@@ -153,8 +153,12 @@ class env():
         self.reward = 0
         self.done = False
 
-        self.car = Car2(RED, self.start[0], self.start[1], self.screen)
-        self.car.speed = 0
+        self.init_speed = 30
+        self.car = Car2(RED, self.start[0], self.start[1], self.screen, speed=self.init_speed)
+        self.car.initial_state = (self.start[0], self.start[1], 0, 0, self.init_speed, 0, self.init_speed)
+        self.car.speed = self.init_speed
+        self.car.vel[0] = self.init_speed
+        self.car.reset()
 
         if self.obs_num!=0:
         
@@ -169,14 +173,14 @@ class env():
             self.obs_state2 = [obs.speed for obs in self.obstacles]
             self.obs_state = tuple([x for a in self.obs_state1 for x in a] + self.obs_state2)
         
-        self.state = tuple([0.1*ss for ss in self.car.initial_state[:2]]) + self.car.initial_state[2:] + self.goal
-        self.state += self.obs_state if self.obs_num!=0 else ()
+        self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.01*self.goal[0], 0.01*self.goal[1])
+        #self.state += self.obs_state if self.obs_num!=0 else ()
 
         self.bound = 20
         self.observation_space = len(self.state)
         self.action_space = 25
 
-        self.time_limit = 200
+        self.time_limit = 100
         self.t = 0
 
         #self.path_planner = rrt_star(self.screen, self.size, self.bound, self.visualize)
@@ -191,7 +195,9 @@ class env():
         self.start = (random.uniform(50,100), start_line)
         self.goal = (random.uniform(1100,1300), goal_line)
 
-        self.car.initial_state = (self.start[0], self.start[1], 0, 0, 0, 0, 0)
+        self.car.initial_state = (self.start[0], self.start[1], 0, 0, self.init_speed, 0, self.init_speed)
+        self.car.speed = self.init_speed
+        self.car.vel[0] = self.init_speed
         self.car.reset()
 
         for i in range(4):
@@ -207,9 +213,9 @@ class env():
             self.obs_state1 = [(obs.pose[0], obs.pose[1]) for obs in self.obstacles]
             self.obs_state2 = [obs.speed for obs in self.obstacles]
             self.obs_state = tuple([x for a in self.obs_state1 for x in a] + self.obs_state2)
-        
-        self.state = tuple([0.1*ss for ss in self.car.initial_state[:2]]) + self.car.initial_state[2:] + self.goal
-        self.state += self.obs_state if self.obs_num!=0 else ()
+
+        self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.01*self.goal[0], 0.01*self.goal[1])
+        #self.state += self.obs_state if self.obs_num!=0 else ()
 
         self.reward = 0
         self.done = False
@@ -225,7 +231,7 @@ class env():
         steer = min(1, max(action[0], -1))
         accel = min(1, max(action[1], -1))
         """
-        steer = 0.5*((action/5)-2)
+        steer = 0.5*((action//5)-2)
         accel = 0.5*((action%5)-2)
         self.car.turn(steer)
         self.car.accelerate(accel)
@@ -257,15 +263,15 @@ class env():
         self.obs_state2 = [obs.speed for obs in self.obstacles]
         self.obs_state = tuple([x for a in self.obs_state1 for x in a] + self.obs_state2)
         """
-        self.state = (self.car.pose[0], self.car.pose[1], self.car.angle, self.car.steering_angle,
-                             self.car.vel[0], self.car.vel[1], self.car.speed, self.goal[0], self.goal[1])
+        self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.01*self.goal[0], 0.01*self.goal[1])
 
-        self.state = self.state #+ self.obs_state
+        #self.state = self.state + self.obs_state
 
-        self.done, self.reward, _ = self.reward_check()
+        self.reward, self.done, info = self.reward_check()
+
         self.t += 1
 
-        return self.state, self.reward, self.done, 0
+        return self.state, self.reward, self.done, (info=='reached')
 
     def collision_check(self):
         if self.obs_num ==0:
@@ -279,29 +285,57 @@ class env():
         return any(collision)
 
     def reward_check(self):
+
+        reward = self.get_reward()
+
+        terminate = False
+        info = ''
+
         if self.done:
-            return True, 0, 'done'
+            terminate = True
+            info = 'done'
         elif self.collision_check():
-            return True, -100, 'collision'
+            terminate = True
+            info = 'collision'
         elif(self.car.pose[0]<0 or self.car.pose[0]>1400):
-            return True, -10, 'out of range'
+            terminate = False
+            info = 'out of range'
         elif(self.car.pose[1]<300 or self.car.pose[1]>500):
-            return False, -10, 'out of range'
+            terminate = False
+            info = 'out of range'
         elif(self.t >= self.time_limit):
-            return True, -10, 'time out'
+            terminate = True
+            info = 'time out'
         else:
             goal_dist = self.dist(self.car.pose, self.goal)
             if goal_dist<self.bound:
-                return True, 100, 'reached'
+                terminate = True
+                info = 'reached'
             else:
-                return False, -0.001*goal_dist, 'on going'
+                terminate = False
+                info = 'on going'
 
+        return reward, terminate, info
+
+    
     def get_reward(self):
         goal_dist = self.dist(self.car.pose, self.goal)
+
         if goal_dist<self.bound:
-            return 1
+            reached = True
         else:
-            return -1
+            reached = False
+
+        out_of_range = False
+        if(self.car.pose[0]<0 or self.car.pose[0]>1400):
+            out_of_range = True
+        elif(self.car.pose[1]<300 or self.car.pose[1]>500):
+            out_of_range = True
+
+        collision = self.collision_check()
+
+        return -0.001 * goal_dist - 5 * out_of_range - 20 * collision + 100 * reached
+    
 
     def dist(self,p1,p2):     #distance between two points
         return math.sqrt((p1[0]-p2[0])*(p1[0]-p2[0])+(p1[1]-p2[1])*(p1[1]-p2[1]))
@@ -348,13 +382,13 @@ class env():
 
 
 if __name__ == "__main__":
-    new_env = env(visualize=True)
-    new_env.reset()
-    speed = 1
-    for i in range(10):
-        new_env.step(4)
-    for i in range(10):
-        new_env.step(0)
+    new_env = env(visualize=False)
+    for k in range(100):
+        new_env.reset()
+        speed = 1
+        for i in range(100):
+            new_env.step(random.randrange(25))
+        print (k)
     a=input()
     '''
     total_time = 0

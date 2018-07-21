@@ -37,7 +37,7 @@ def dampenSpeed(speed, velocity_dampening, delta):
         new_speed = speed - velocity_dampening * delta * (speed / 10)
         if new_speed >= 0:
             new_speed = 0
-    return int(new_speed)
+    return new_speed
 
 
 class Car2():

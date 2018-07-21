@@ -4,7 +4,7 @@ import tensorflow as tf
 import pycar
 import spmax
 import scipy
-import timer
+import timeit
 
 from collections import deque
 
@@ -136,7 +136,7 @@ class DQNAgent:
 
         self.discount_factor = discount_factor
         self.learning_rate = learning_rate
-        self.epsilon = 1.0
+        self.epsilon = 0
         self.epsilon_decay = epsilon_decay
         self.epsilon_min = epsilon_min
         self.batch_size = batch_size
@@ -366,9 +366,8 @@ avg_success_list = deque(maxlen=100)
 
 result_saver = []
 
-timer.start_timer()
-
-for i in range(1000000):
+tt = timeit.default_timer()
+for i in range(100000):
     obs = env.reset()
     done = False
     total_reward = 0
@@ -399,23 +398,24 @@ for i in range(1000000):
     if cur_mode != 'test':
         if (i%4)==0:
             agent.update_target()
-        if (i%100)==0:
-            agent.saver.save(agent.sess, "./net/spmax_{}.ckpt".format(i))
+        #if (i%100)==0:
+        #    agent.saver.save(agent.sess, "./net/spmax_{}.ckpt".format(i))
 
     avg_return_list.append(total_reward)
     avg_loss_list.append(total_loss)
     avg_success_list.append(total_success)
     
-    if (i > 1000 and np.mean(avg_success_list) > 0.95):
+    if (i > 100 and np.mean(avg_success_list) > 0.95):
         print('{} loss : {:.3f}, return : {:.3f}, success : {:.3f}, eps : {:.3f}'.format(i, np.mean(avg_loss_list), np.mean(avg_return_list), np.mean(avg_success_list), agent.epsilon))
         print('The problem is solved with {} episodes'.format(i))
         if cur_mode != 'test':
             agent.saver.save(agent.sess, "./spmax_{}.ckpt".format(i))
         break
     
-    if (i%100)==0:
-        result_saver.append({'i':i,'loss':np.mean(avg_loss_list),'return':np.mean(avg_return_list),'success':np.mean(avg_success_list),'eps':agent.epsilon})
-        np.save('spmax_result.npy',result_saver)
-        timer.print_time()
+    if (i%10)==0:
+        print (timeit.default_timer()-tt)
+        tt = timeit.default_timer()
+        #result_saver.append({'i':i,'loss':np.mean(avg_loss_list),'return':np.mean(avg_return_list),'success':np.mean(avg_success_list),'eps':agent.epsilon})
+        #np.save('spmax_result.npy',result_saver)
         print('{} loss : {:.3f}, return : {:.3f}, success : {:.3f}, eps : {:.3f}'.format(i, np.mean(avg_loss_list), np.mean(avg_return_list), np.mean(avg_success_list), agent.epsilon))
 

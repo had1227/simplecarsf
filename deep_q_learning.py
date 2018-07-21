@@ -128,7 +128,7 @@ class DQNAgent:
                  discount_factor = 0.99, epsilon_decay = 0.9999995, epsilon_min = 0.1,
                  learning_rate = 1e-3, # STEP SIZE
                  batch_size = 256, 
-                 memory_size = 50000, hidden_unit_size = 64,
+                 memory_size = 10000, hidden_unit_size = 64,
                  target_mode = 'DDQN', memory_mode = 'PER', policy_mode='argmax', restore=False, net_dir=''):
         self.seed = seed 
         self.obs_dim = obs_dim
@@ -213,7 +213,7 @@ class DQNAgent:
                 out = tf.layers.dense(out, self.n_action,
                                   kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_out')
                 self.q_predict_old = tf.nn.softmax(out/self.q_alpha, name='q_predict')
-                self.q_dist = tf.distributions.Multinomial([1.], probs=self.q_predict_old)
+                self.q_dist_old = tf.distributions.Multinomial([1.], probs=self.q_predict_old)
         
         self.weights = tf.trainable_variables(scope='q_func')
         self.weights_old = tf.trainable_variables(scope='q_func_old')
@@ -264,22 +264,29 @@ class DQNAgent:
         return a
 
     def get_action(self, obs):
-        if np.random.rand() <= self.epsilon:
-            a = random.randrange(self.n_action)
-            return a
-        else:
-            q_value = self.get_prediction([obs])
-            return np.argmax(q_value[0])
+        if self.policy_mode=='argmax':
+            if np.random.rand() <= self.epsilon:
+                a = random.randrange(self.n_action)
+                return a
+            else:
+                q_value = self.get_prediction([obs])
+                return np.argmax(q_value[0])
+        elif self.policy_mode=='spmax':
+            q_sample_val = self.sess.run(self.q_sample,feed_dict={self.obs_ph:[obs]}) # one hot
+            return np.argmax(q_sample_val[0])  
+        elif self.policy_mode=='softmax':
+            q_sample_val = self.sess.run(self.q_sample,feed_dict={self.obs_ph:[obs]}) # one hot
+            return np.argmax(q_sample_val[0])
 
     def get_max_action(self,obs):
         if self.policy_mode=='argmax':
             q_value = self.sess.run(self.q_predict,feed_dict={self.obs_ph:[obs]})
             return np.argmax(q_value[0])
         elif self.policy_mode=='spmax':
-            q_sample_val = self.sess.run(self.q_sample,feed_dict={self.obs_ph:[obs]})
+            q_sample_val = self.sess.run(self.q_sample,feed_dict={self.obs_ph:[obs]}) # one hot
             return np.argmax(q_sample_val[0])
         elif self.policy_mode=='softmax':
-            q_sample_val = self.sess.run(self.q_sample,feed_dict={self.obs_ph:[obs]})
+            q_sample_val = self.sess.run(self.q_sample,feed_dict={self.obs_ph:[obs]}) # one hot
             return np.argmax(q_sample_val[0])
 
     def add_experience(self, obs, action, reward, next_obs, done):
@@ -356,8 +363,11 @@ act_dim = env.action_space
 mode = ['train','test']
 cur_mode = 'train'
 
+policy_mode = ['argmax','spmax','softmax']
+cur_policy = 'softmax'
+
 max_t = env.time_limit
-agent = DQNAgent(env.observation_space,env.action_space,memory_mode='PER',target_mode='DQN', policy_mode='spmax',
+agent = DQNAgent(env.observation_space,env.action_space,memory_mode='PER',target_mode='DQN', policy_mode=cur_policy,
                 restore=False, net_dir='q_learning_iter_9900.ckpt') # memory_mode='PER',target_mode='DDQN'
 
 avg_return_list = deque(maxlen=100)
@@ -367,6 +377,9 @@ avg_success_list = deque(maxlen=100)
 result_saver = []
 
 timer.start_timer()
+
+print(cur_mode)
+print(cur_policy)
 
 for i in range(1000000):
     obs = env.reset()
@@ -400,7 +413,7 @@ for i in range(1000000):
         if (i%4)==0:
             agent.update_target()
         if (i%100)==0:
-            agent.saver.save(agent.sess, "./net/spmax_{}.ckpt".format(i))
+            agent.saver.save(agent.sess, "./net/"+cur_policy+"/iter_{}.ckpt".format(i))
 
     avg_return_list.append(total_reward)
     avg_loss_list.append(total_loss)
@@ -410,12 +423,12 @@ for i in range(1000000):
         print('{} loss : {:.3f}, return : {:.3f}, success : {:.3f}, eps : {:.3f}'.format(i, np.mean(avg_loss_list), np.mean(avg_return_list), np.mean(avg_success_list), agent.epsilon))
         print('The problem is solved with {} episodes'.format(i))
         if cur_mode != 'test':
-            agent.saver.save(agent.sess, "./spmax_{}.ckpt".format(i))
+            agent.saver.save(agent.sess, "./net/"+cur_policy+"/iter_{}.ckpt".format(i))
         break
     
     if (i%100)==0:
         result_saver.append({'i':i,'loss':np.mean(avg_loss_list),'return':np.mean(avg_return_list),'success':np.mean(avg_success_list),'eps':agent.epsilon})
-        np.save('spmax_result.npy',result_saver)
+        np.save(cur_policy + '_result.npy',result_saver)
         timer.print_time()
         print('{} loss : {:.3f}, return : {:.3f}, success : {:.3f}, eps : {:.3f}'.format(i, np.mean(avg_loss_list), np.mean(avg_return_list), np.mean(avg_success_list), agent.epsilon))
 

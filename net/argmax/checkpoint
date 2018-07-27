@@ -1,0 +1,6 @@
+model_checkpoint_path: "iter_99900.ckpt"
+all_model_checkpoint_paths: "iter_99500.ckpt"
+all_model_checkpoint_paths: "iter_99600.ckpt"
+all_model_checkpoint_paths: "iter_99700.ckpt"
+all_model_checkpoint_paths: "iter_99800.ckpt"
+all_model_checkpoint_paths: "iter_99900.ckpt"

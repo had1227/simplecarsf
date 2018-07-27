@@ -5,6 +5,7 @@ import pycar
 import spmax
 import scipy
 import timer
+import gym
 
 from collections import deque
 
@@ -48,7 +49,8 @@ class ReplayMemory:
         for i in range(len(idx)):
             self.memory.update(idx[i], priorities[i])
         self.prio_max = max(priorities.max(), self.prio_max)
-        
+
+
 class SumTree:
     def __init__(self, capacity=100000):
         self.capacity = capacity
@@ -123,13 +125,17 @@ class SumTree:
 
         return batch_idx, batch_priorities, batch
 
+def env_initializer(env, state):
+    env.env.state = state
+    env.env.steps_beyond_done = None
+
 class DQNAgent:
     def __init__(self, obs_dim, n_action, seed=0,
-                 discount_factor = 0.99, epsilon_decay = 0.9999995, epsilon_min = 0.1,
+                 discount_factor = 0.99, epsilon_decay = 0.999, epsilon_min = 0.01,
                  learning_rate = 1e-3, # STEP SIZE
                  batch_size = 256, 
                  memory_size = 10000, hidden_unit_size = 64,
-                 target_mode = 'DDQN', memory_mode = 'PER', policy_mode='argmax', restore=False, net_dir=''):
+                 target_mode = 'DDQN', memory_mode = 'PER', policy_mode='argmax', restore=False, save_on=False, net_dir=''):
         self.seed = seed 
         self.obs_dim = obs_dim
         self.n_action = n_action
@@ -140,21 +146,26 @@ class DQNAgent:
         self.epsilon_decay = epsilon_decay
         self.epsilon_min = epsilon_min
         self.batch_size = batch_size
-        self.train_start = 1000
+        self.train_start = 500
 
         self.target_mode = target_mode
         self.memory_mode = memory_mode
         self.policy_mode = policy_mode
         self.q_alpha = 1
+        self.gamma = 0.99
 
         if memory_mode == 'PER':
             self.memory = ReplayMemory(memory_size=memory_size)
         else:
             self.memory = deque(maxlen=memory_size)
             
+        self.max_k = 5
+        self.max_d = 5
+
         self.hidden_unit_size = hidden_unit_size
         self.restore = restore
         self.net_dir = net_dir
+        self.save_on = save_on
 
         self.g = tf.Graph()
         with self.g.as_default():
@@ -162,20 +173,21 @@ class DQNAgent:
             self.build_model()
             self.build_loss()
             self.build_update_operation()
-            self.saver = tf.train.Saver()
+            if self.save_on:
+                self.saver = tf.train.Saver()
             self.init_session()
     
     def build_placeholders(self):
         self.obs_ph = tf.placeholder(tf.float32, (None, self.obs_dim), 'obs')
         self.target_ph = tf.placeholder(tf.float32, (None, self.n_action), 'target')
         self.batch_weights_ph = tf.placeholder(tf.float32,(None, self.n_action), name="batch_weights")
-        self.learning_rate_ph = tf.placeholder(tf.float32, (), 'lr')        
+        self.learning_rate_ph = tf.placeholder(tf.float32, (), 'lr')
     
     def build_model(self):
         hid1_size = self.hidden_unit_size  # 10 empirically determined
         hid2_size = self.hidden_unit_size
         
-        with tf.variable_scope('q_func'):
+        with tf.variable_scope('q_func_new'):
             out = tf.layers.dense(self.obs_ph, hid1_size, tf.tanh,
                                   kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='hidden1')
             out = tf.layers.dense(out, hid2_size, tf.tanh,
@@ -184,17 +196,17 @@ class DQNAgent:
                 self.q_predict = tf.layers.dense(out, self.n_action,
                                   kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_predict')
             elif self.policy_mode=='spmax':
-                out = tf.layers.dense(out, self.n_action,
-                                  kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_out')
-                self.q_predict = tf.contrib.sparsemax.sparsemax(out/self.q_alpha, name='q_predict')
-                self.q_dist = tf.distributions.Multinomial([1.], probs=self.q_predict)
-                self.q_sample = self.q_dist.sample()
+                self.q_predict = tf.layers.dense(out, self.n_action,
+                                  kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_predict')
+                self.q_dist = tf.contrib.sparsemax.sparsemax(self.q_predict/self.q_alpha, name='q_dist')
+                self.q_dist_multi = tf.distributions.Multinomial([1.], probs=self.q_dist)
+                self.q_sample = self.q_dist_multi.sample()
             elif self.policy_mode=='softmax':
-                out = tf.layers.dense(out, self.n_action,
-                                  kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_out')
-                self.q_predict = tf.nn.softmax(out/self.q_alpha, name='q_predict')
-                self.q_dist = tf.distributions.Multinomial([1.], probs=self.q_predict)
-                self.q_sample = self.q_dist.sample()
+                self.q_predict = tf.layers.dense(out, self.n_action,
+                                  kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_predict')
+                self.q_dist = tf.nn.softmax(self.q_predict/self.q_alpha, name='q_dist')
+                self.q_dist_multi = tf.distributions.Multinomial([1.], probs=self.q_dist)
+                self.q_sample = self.q_dist_multi.sample()
                         
         with tf.variable_scope('q_func_old'):
             out = tf.layers.dense(self.obs_ph, hid1_size, tf.tanh,
@@ -205,18 +217,23 @@ class DQNAgent:
                 self.q_predict_old = tf.layers.dense(out, self.n_action,
                                   kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_predict')
             elif self.policy_mode=='spmax':
-                out = tf.layers.dense(out, self.n_action,
-                                  kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_out')
-                self.q_predict_old = tf.contrib.sparsemax.sparsemax(out/self.q_alpha, name='q_predict')
-                self.q_dist_old = tf.distributions.Multinomial([1.], probs=self.q_predict_old)
+                self.q_predict_old = tf.layers.dense(out, self.n_action,
+                                  kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_predict')
+                self.q_dist_old = tf.contrib.sparsemax.sparsemax(self.q_predict_old/self.q_alpha, name='q_dist')
+                self.q_dist_multi_old = tf.distributions.Multinomial([1.], probs=self.q_dist_old)
+                self.q_sample_old = self.q_dist_multi_old.sample()
             elif self.policy_mode=='softmax':
-                out = tf.layers.dense(out, self.n_action,
-                                  kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_out')
-                self.q_predict_old = tf.nn.softmax(out/self.q_alpha, name='q_predict')
-                self.q_dist_old = tf.distributions.Multinomial([1.], probs=self.q_predict_old)
+                self.q_predict_old = tf.layers.dense(out, self.n_action,
+                                  kernel_initializer=tf.random_normal_initializer(stddev=0.01,seed=self.seed), name='q_predict')
+                self.q_dist_old = tf.nn.softmax(self.q_predict_old/self.q_alpha, name='q_dist')
+                self.q_dist_multi_old = tf.distributions.Multinomial([1.], probs=self.q_dist_old)
+                self.q_sample_old = self.q_dist_multi_old.sample()
         
-        self.weights = tf.trainable_variables(scope='q_func')
+        self.weights = tf.trainable_variables(scope='q_func_new')
         self.weights_old = tf.trainable_variables(scope='q_func_old')
+
+        self.grad_ph = [tf.placeholder('float32',shape=w.shape) for w in self.weights]
+        self.grad_op = [tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).apply_gradients([g_v]) for g_v in zip(self.grad_ph,self.weights)]
 
     def build_loss(self):
         self.errors = self.target_ph - self.q_predict
@@ -258,11 +275,6 @@ class DQNAgent:
         q_value = self.sess.run(self.q_predict,feed_dict={self.obs_ph:obs})        
         return q_value
 
-    def get_argmax_action(self,obs):
-        q_value = self.get_prediction([obs])
-        a = np.argmax(q_value[0])
-        return a
-
     def get_action(self, obs):
         if self.policy_mode=='argmax':
             if np.random.rand() <= self.epsilon:
@@ -275,7 +287,7 @@ class DQNAgent:
             q_sample_val = self.sess.run(self.q_sample,feed_dict={self.obs_ph:[obs]}) # one hot
             return np.argmax(q_sample_val[0])  
         elif self.policy_mode=='softmax':
-            q_sample_val = self.sess.run(self.q_sample,feed_dict={self.obs_ph:[obs]}) # one hot
+            q_sample_val,pred = self.sess.run([self.q_sample,self.q_predict],feed_dict={self.obs_ph:[obs]}) # one hot
             return np.argmax(q_sample_val[0])
 
     def get_max_action(self,obs):
@@ -294,6 +306,148 @@ class DQNAgent:
             self.memory.save_experience(obs, action, reward, next_obs, done)
         else:
             self.memory.append((obs, action, reward, next_obs, done))
+
+    def get_mct_q_val_k_sample(self, env, obs, act, k, d):
+
+        if d==1:
+            env_initializer(env, obs)
+            next_obs, r, done, info = env.step(act)
+            if done:
+                mse = tf.square(r - self.q_predict[0][act])
+                grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
+                loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:obs})
+                gradients = list(list(zip(*gradients))[0])
+                return r, gradients, loss, next_obs, r, done, info
+            else:
+                next_q_value = self.get_prediction_old(np.expand_dims(next_obs,0))
+                q_val_est = r + self.gamma * self.q_alpha * spmax.spmax(next_q_value/self.q_alpha)
+                mse = tf.square(q_val_est - self.q_predict[0][act])
+                grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
+                loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0)})
+                gradients = list(list(zip(*gradients))[0])
+                return q_val_est, gradients, loss, next_obs, r, done, info
+        else:
+            env_initializer(env, obs)
+            next_obs, r, done, info = env.step(act)
+
+            if done:
+                mse = tf.square(r - self.q_predict[0][act])
+                grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
+                loss, gradients = self.sess.run([mse, grad], feed_dict={self.obs_ph:np.expand_dims(obs,0)})
+                gradients = list(list(zip(*gradients))[0])
+                return r, gradients, loss, next_obs, r, done, info
+
+            dist = self.sess.run(self.q_dist, feed_dict={self.obs_ph:np.expand_dims(obs,0)})
+
+            n_of_branch = np.random.multinomial(k, dist[0])
+            n_of_branch = np.maximum(n_of_branch - 1, 0) + 1
+
+            actions = [[i]*t[i] for i in range(len(t))]
+            actions = np.concatenate(actions)
+
+            q_val_list = np.zeros(self.n_action)
+
+            gradients = [np.zeros(w.shape) for w in self.weights]
+            loss = 0
+
+            for i in range(k):
+                next_q_val, next_gradients, next_loss, _, _, _, _ = self.get_mct_q_val_k_sample(env,next_obs,actions[i],k,d-1)
+                gradients = self.grad_sum(gradients,next_gradients)
+                loss += next_loss
+                q_val_list[actions[i]] += next_q_val
+
+            q_val_list = q_val_list * dist[0]
+            q_val_list = q_val_list / n_of_branch_for_each_act
+
+            q_val_est = r + self.gamma * np.sum(q_val_list)
+            mse = tf.square(q_val_est - self.q_predict[0][act])
+            new_grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
+            new_loss, new_gradients = self.sess.run([mse, new_grad], feed_dict={self.obs_ph:obs})
+            new_gradients = list(list(zip(*new_gradients))[0])
+
+            gradients = self.grad_devide(gradients,k)
+            gradients = self.grad_sum(gradients,new_gradients)
+            loss = (1/k)*loss + new_loss
+
+            return q_val_est, gradients, loss, next_obs, r, done, info
+
+    def get_mct_q_val(self, env, obs, act, d):
+
+        if d==1:
+            env_initializer(env, obs)
+            next_obs, r, done, info = env.step(act)
+            if done:
+                mse = tf.square(r - self.q_predict[0][act])
+                grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
+                loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0)})
+                gradients = list(list(zip(*gradients))[0])
+                return r, gradients, loss, next_obs, r, done, info
+            else:
+                next_q_value = self.get_prediction_old(np.expand_dims(next_obs,0))
+                q_val_est = r + self.gamma * self.q_alpha * spmax.spmax(next_q_value/self.q_alpha)
+                mse = tf.square(q_val_est - self.q_predict[0][act])
+                grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
+                loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
+                gradients = list(list(zip(*gradients))[0])
+                return q_val_est, gradients, loss, next_obs, r, done, info
+        else:
+            env_initializer(env, obs)
+            next_obs, r, done, info = env.step(act)
+
+            if done:
+                mse = tf.square(r - self.q_predict[0][act])
+                grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
+                loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
+                gradients = list(list(zip(*gradients))[0])
+                return r, gradients, loss, next_obs, r, done, info
+
+            dist = self.sess.run(self.q_dist, feed_dict={self.obs_ph:np.expand_dims(next_obs,0)})
+
+            q_val_list = np.zeros(self.n_action)
+            gradients = [np.zeros(w.shape) for w in self.weights]
+            loss = 0
+            node_num = 0
+
+            for i in range(self.n_action):
+                if dist[0][i]>0:
+                    next_q_val, next_gradients, next_loss, _, _, _, _ = self.get_mct_q_val(env,next_obs,i,d-1)
+                    gradients = self.grad_sum(gradients,next_gradients)
+                    loss += next_loss
+                    q_val_list[i] = next_q_val
+                    node_num += 1
+                else:
+                    q_val_list[i] = 0
+
+            q_val_list = q_val_list * dist[0]
+
+            q_val_est = r + self.gamma * np.sum(q_val_list)
+            mse = tf.square(q_val_est - self.q_predict[0][act])
+            new_grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
+            new_loss, new_gradients = self.sess.run([mse,new_grad], feed_dict={self.obs_ph:np.expand_dims(obs,0)})
+            new_gradients = list(list(zip(*gradients))[0])
+
+            gradients = self.grad_devide(gradients,node_num)
+            gradients = self.grad_sum(gradients,new_gradients)
+            loss = (1.0/node_num)*loss + new_loss
+
+            return q_val_est, gradients, loss, next_obs, r, done, info
+
+    def grad_sum(self,grad1,grad2):
+        return [a+b for a, b in zip(grad1,grad2)]
+
+    def grad_devide(self,grad,val):
+        return [g/val for g in grad]
+    
+    def mct_search(self,env,obs,act):
+        q_val, grad, loss, next_obs, reward, done, info = self.get_mct_q_val(env, obs, act, self.max_d)
+
+        return grad, loss, next_obs, reward, done, info
+
+    def train_with_grad(self, grad):
+        feed_dict = {g_ph:g_v for g_ph,g_v in zip(self.grad_ph,grad)}
+        feed_dict[self.learning_rate_ph]=self.learning_rate
+
+        self.sess.run(self.grad_op, feed_dict=feed_dict)    
 
     def train_model(self):
         loss = np.nan
@@ -356,23 +510,28 @@ class DQNAgent:
         return loss
 
 
-env = pycar.env(visualize=False)
-obs_dim = env.observation_space
-act_dim = env.action_space
+#env = pycar.env(visualize=True)
+env = gym.make('CartPole-v0')
+obs_dim = env.observation_space.shape[0]
+act_dim = env.action_space.n
 
 mode = ['train','test']
 cur_mode = 'train'
 
 policy_mode = ['argmax','spmax','softmax']
-cur_policy = 'softmax'
+cur_policy = 'spmax'
 
-max_t = env.time_limit
-agent = DQNAgent(env.observation_space,env.action_space,memory_mode='PER',target_mode='DQN', policy_mode=cur_policy,
-                restore=False, net_dir='q_learning_iter_9900.ckpt') # memory_mode='PER',target_mode='DDQN'
+target_mode = ['DQN', 'DDQN', 'A3C', 'MCT']
+cur_target = 'MCT'
 
-avg_return_list = deque(maxlen=100)
-avg_loss_list = deque(maxlen=100)
-avg_success_list = deque(maxlen=100)
+max_t = env.spec.max_episode_steps
+#max_t = env.time_limit
+agent = DQNAgent(obs_dim,act_dim,memory_mode='PER',target_mode=cur_target, policy_mode=cur_policy,
+                restore=False, net_dir='argmax/iter_56000.ckpt') # memory_mode='PER',target_mode='DDQN'
+
+avg_return_list = deque(maxlen=10)
+avg_loss_list = deque(maxlen=10)
+avg_success_list = deque(maxlen=10)
 
 result_saver = []
 
@@ -380,55 +539,94 @@ timer.start_timer()
 
 print(cur_mode)
 print(cur_policy)
+print(cur_target)
 
-for i in range(1000000):
+
+async_num=4
+if cur_target=='MCT' or cur_target=='A3C':
+    async_grad = [np.zeros(w.shape) for w in agent.weights]
+    obs_set = []
+    for n in range(async_num):
+        obs_set.append(env.reset())
+
+for i in range(10000):
     obs = env.reset()
     done = False
     total_reward = 0
     total_loss = 0
     total_success = 0
+    if(i%1000==0):
+        cur_mode='test'
+        print ("test")
+    elif (i%1000==100):
+        cur_mode='train'
+        print ("train")
+
+
     for t in range(max_t):
         if cur_mode=='test':
             action = agent.get_max_action(obs)
             next_obs, reward, done, info = env.step(action)
-        else:
-            action = agent.get_action(obs)
-            next_obs, reward, done, info = env.step(action)
-            agent.add_experience(obs,action,reward,next_obs,done)
-        
-            loss = agent.train_model()
-            agent.update_memory(t,max_t)
-            agent.update_policy()
-        
             obs = next_obs
+            loss=0
+            if done:
+                break
+        else:
+            if cur_target=='MCT' or cur_target=='A3C':
+                async_obs = obs_set[i % async_num]            
+                env_initializer(env, async_obs)
+                action = agent.get_action(async_obs)
+                grad, loss, next_obs, reward, done, info = agent.mct_search(env,async_obs,action)
+                async_grad = agent.grad_sum(async_grad,grad)
+
+                if i % async_num == (async_num-1):
+                    agent.train_with_grad(async_grad)
+                    async_grad = [np.zeros(w.shape) for w in agent.weights]
+
+                if done:
+                    next_obs = env.reset()
+                    print(i % async_num)
+                obs_set[i % async_num] = next_obs
+                break
+
+            else:
+                action = agent.get_action(obs)
+                next_obs, reward, done, info = env.step(action)
+                agent.add_experience(obs,action,reward,next_obs,done)
+        
+                loss = agent.train_model()
+                agent.update_memory(t,max_t)
+                agent.update_policy()
+        
+                obs = next_obs
+
+                if done:
+                    break
 
         total_reward += reward
         total_loss += loss
-        total_success += info
+        #total_success += info
         
-        if done:
-            break
     
     if cur_mode != 'test':
-        if (i%4)==0:
-            agent.update_target()
-        if (i%100)==0:
-            agent.saver.save(agent.sess, "./net/"+cur_policy+"/iter_{}.ckpt".format(i))
+        agent.update_target()
+        #if (i%100)==0:
+        #    agent.saver.save(agent.sess, "./net/"+cur_policy+"/iter_{}.ckpt".format(i))
 
     avg_return_list.append(total_reward)
     avg_loss_list.append(total_loss)
     avg_success_list.append(total_success)
     
-    if (i > 1000 and np.mean(avg_success_list) > 0.95):
+    if (np.mean(avg_return_list) > 490):
         print('{} loss : {:.3f}, return : {:.3f}, success : {:.3f}, eps : {:.3f}'.format(i, np.mean(avg_loss_list), np.mean(avg_return_list), np.mean(avg_success_list), agent.epsilon))
         print('The problem is solved with {} episodes'.format(i))
-        if cur_mode != 'test':
-            agent.saver.save(agent.sess, "./net/"+cur_policy+"/iter_{}.ckpt".format(i))
+        #if cur_mode != 'test':
+        #    agent.saver.save(agent.sess, "./net/"+cur_policy+"/iter_{}.ckpt".format(i))
         break
     
-    if (i%100)==0:
-        result_saver.append({'i':i,'loss':np.mean(avg_loss_list),'return':np.mean(avg_return_list),'success':np.mean(avg_success_list),'eps':agent.epsilon})
-        np.save(cur_policy + '_result.npy',result_saver)
+    if (i%10)==0:
+        #result_saver.append({'i':i,'loss':np.mean(avg_loss_list),'return':np.mean(avg_return_list),'success':np.mean(avg_success_list),'eps':agent.epsilon})
+        #np.save(cur_policy + '_result.npy',result_saver)
         timer.print_time()
         print('{} loss : {:.3f}, return : {:.3f}, success : {:.3f}, eps : {:.3f}'.format(i, np.mean(avg_loss_list), np.mean(avg_return_list), np.mean(avg_success_list), agent.epsilon))
 

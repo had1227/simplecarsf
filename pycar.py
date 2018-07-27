@@ -139,7 +139,7 @@ class env():
             # Initialize the game engine
             pygame.init()
             self.screen = pygame.display.set_mode(self.size)
-            pygame.display.set_caption("mdeyo car sim")
+            pygame.display.set_caption("car sim")
             background = pygame.Surface(self.screen.get_size())
             background.fill((0, 0, 0))
             self.clock = pygame.time.Clock()
@@ -173,7 +173,8 @@ class env():
             self.obs_state2 = [obs.speed for obs in self.obstacles]
             self.obs_state = tuple([x for a in self.obs_state1 for x in a] + self.obs_state2)
         
-        self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.01*self.goal[0], 0.01*self.goal[1])
+        self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.1*self.car.speed)
+        #self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.01*(self.goal[0]-self.car.pose[0]), 0.01*(self.goal[1]-self.car.pose[1]))
         #self.state += self.obs_state if self.obs_num!=0 else ()
 
         self.bound = 20
@@ -214,7 +215,8 @@ class env():
             self.obs_state2 = [obs.speed for obs in self.obstacles]
             self.obs_state = tuple([x for a in self.obs_state1 for x in a] + self.obs_state2)
 
-        self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.01*self.goal[0], 0.01*self.goal[1])
+        self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.1*self.car.speed)
+        #self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.01*(self.goal[0]-self.car.pose[0]), 0.01*(self.goal[1]-self.car.pose[1]))
         #self.state += self.obs_state if self.obs_num!=0 else ()
 
         self.reward = 0
@@ -263,7 +265,9 @@ class env():
         self.obs_state2 = [obs.speed for obs in self.obstacles]
         self.obs_state = tuple([x for a in self.obs_state1 for x in a] + self.obs_state2)
         """
-        self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.01*self.goal[0], 0.01*self.goal[1])
+
+        self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.1*self.car.speed)
+        #self.state = (0.01*self.car.pose[0], 0.01*self.car.pose[1], 0.1*self.car.vel[0], 0.1*self.car.vel[1], 0.01*(self.goal[0]-self.car.pose[0]), 0.01*(self.goal[1]-self.car.pose[1]))
 
         #self.state = self.state + self.obs_state
 
@@ -297,7 +301,7 @@ class env():
         elif self.collision_check():
             terminate = True
             info = 'collision'
-        elif(self.car.pose[0]<0 or self.car.pose[0]>1400):
+        elif(self.car.pose[0]<0):
             terminate = False
             info = 'out of range'
         elif(self.car.pose[1]<300 or self.car.pose[1]>500):
@@ -319,15 +323,16 @@ class env():
 
     
     def get_reward(self):
-        goal_dist = self.dist(self.car.pose, self.goal)
+        #goal_dist = self.dist(self.car.pose, self.goal)
+        goal_dist = self.car.initial_state[0] - self.car.pose[0]
 
-        if goal_dist<self.bound:
+        if self.car.pose[0]>1200:
             reached = True
         else:
             reached = False
 
         out_of_range = False
-        if(self.car.pose[0]<0 or self.car.pose[0]>1400):
+        if(self.car.pose[0]<0):
             out_of_range = True
         elif(self.car.pose[1]<300 or self.car.pose[1]>500):
             out_of_range = True
@@ -338,7 +343,8 @@ class env():
     
 
     def dist(self,p1,p2):     #distance between two points
-        return math.sqrt((p1[0]-p2[0])*(p1[0]-p2[0])+(p1[1]-p2[1])*(p1[1]-p2[1]))
+        return abs(p1[0]-p2[0]) + abs(p1[1]-p2[1])
+        #return math.sqrt((p1[0]-p2[0])*(p1[0]-p2[0])+(p1[1]-p2[1])*(p1[1]-p2[1]))
     '''
     def follow_rrt_path(self):
         if (self.path_planner.path == None):
@@ -382,13 +388,14 @@ class env():
 
 
 if __name__ == "__main__":
-    new_env = env(visualize=False)
+    new_env = env(visualize=True)
     for k in range(100):
         new_env.reset()
         speed = 1
         for i in range(100):
-            new_env.step(random.randrange(25))
-        print (k)
+            s, r, d, i = new_env.step(14)
+            print (s)
+            print (r)
     a=input()
     '''
     total_time = 0

@@ -235,6 +235,16 @@ class DQNAgent:
         self.grad_ph = [tf.placeholder('float32',shape=w.shape) for w in self.weights]
         self.grad_op = [tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).apply_gradients([g_v]) for g_v in zip(self.grad_ph,self.weights)]
 
+
+        tf.summary.tensor_summary('q_predict',self.q_predict)
+        tf.summary.tensor_summary('weights0',self.weights[0])
+        tf.summary.tensor_summary('weights1',self.weights[1])
+        tf.summary.tensor_summary('weights2',self.weights[2])
+        tf.summary.tensor_summary('weights3',self.weights[3])
+        tf.summary.tensor_summary('weights4',self.weights[4])
+        tf.summary.tensor_summary('weights5',self.weights[5])
+        self.merged=tf.summary.merge_all()
+
     def build_loss(self):
         self.errors = self.target_ph - self.q_predict
         self.loss = 0.5*tf.reduce_mean(tf.square(self.target_ph - self.q_predict))
@@ -255,6 +265,7 @@ class DQNAgent:
         else:
             self.sess.run(tf.global_variables_initializer())
         self.sess.run(self.update_ops)
+        self.writer = tf.summary.FileWriter('./sample',self.sess.graph)
         
     def update_target(self):
         self.sess.run(self.update_ops)
@@ -324,7 +335,7 @@ class DQNAgent:
                 q_val_est = rwd + self.gamma * self.q_alpha * spmax.spmax(next_q_value/self.q_alpha)
                 mse = tf.square(q_val_est - self.q_predict[0][act])
                 grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
-                loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0)})
+                loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
                 gradients = list(list(zip(*gradients))[0])
                 return q_val_est, gradients, loss, visit, next_obs, rwd, done, info
         else:
@@ -335,7 +346,7 @@ class DQNAgent:
             if done:
                 mse = tf.square(rwd - self.q_predict[0][act])
                 grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
-                loss, gradients = self.sess.run([mse, grad], feed_dict={self.obs_ph:np.expand_dims(obs,0)})
+                loss, gradients = self.sess.run([mse, grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
                 gradients = list(list(zip(*gradients))[0])
                 return rwd, gradients, loss, visit, next_obs, rwd, done, info
 
@@ -365,7 +376,7 @@ class DQNAgent:
             q_val_est = rwd + self.gamma * np.sum(q_val_list)
             mse = tf.square(q_val_est - self.q_predict[0][act])
             new_grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
-            new_loss, new_gradients = self.sess.run([mse, new_grad], feed_dict={self.obs_ph:np.expand_dims(obs,0)})
+            new_loss, new_gradients = self.sess.run([mse, new_grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
             new_gradients = list(list(zip(*new_gradients))[0])
 
             gradients = self.grad_devide(gradients,k)
@@ -382,21 +393,21 @@ class DQNAgent:
             visit=1
             if done:
                 mse = tf.square(rwd - self.q_predict[0][act])
-                #grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
-                #loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
-                #gradients = list(list(zip(*gradients))[0])
-                loss=0
-                gradients = 0
+                grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
+                loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
+                gradients = list(list(zip(*gradients))[0])
+                #loss=0
+                #gradients = 0
                 return rwd, gradients, loss, visit, next_obs, rwd, done, info
             else:
                 next_q_value = self.get_prediction_old(np.expand_dims(next_obs,0))
                 q_val_est = rwd + self.gamma * self.q_alpha * spmax.spmax(next_q_value/self.q_alpha)
                 mse = tf.square(q_val_est - self.q_predict[0][act])
-                #grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
-                #loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
-                #gradients = list(list(zip(*gradients))[0])
-                gradients = 0
-                loss = 0
+                grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
+                loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
+                gradients = list(list(zip(*gradients))[0])
+                #gradients = 0
+                #loss = 0
                 return q_val_est, gradients, loss, visit, next_obs, rwd, done, info
         else:
             env_initializer(env, obs)
@@ -405,11 +416,11 @@ class DQNAgent:
 
             if done and d==self.max_d:
                 mse = tf.square(rwd - self.q_predict[0][act])
+                #grad = tf.gradients(mse,self.weights)
                 grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
                 loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
                 gradients = list(list(zip(*gradients))[0])
                 loss=0
-                self.grad_mean(gradients)
                 return rwd, gradients, loss, visit, next_obs, rwd, done, info
             elif done:
                 mse = tf.square(rwd - self.q_predict[0][act])
@@ -439,13 +450,14 @@ class DQNAgent:
                     q_val_list[i] = 0
 
             q_val_list = q_val_list * dist[0]
-
             q_val_est = rwd + self.gamma * np.sum(q_val_list)
+
             if d==self.max_d:
                 mse = tf.square(q_val_est - self.q_predict[0][act])
+                #new_grad = tf.gradients(mse,self.weights)
                 new_grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
-                new_loss, new_gradients = self.sess.run([mse,new_grad], feed_dict={self.obs_ph:np.expand_dims(obs,0)})
-                new_gradients = list(list(zip(*gradients))[0])
+                new_loss, new_gradients = self.sess.run([mse,new_grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
+                new_gradients = list(list(zip(*new_gradients))[0])
                 return q_val_est, new_gradients, new_loss, visit, next_obs, rwd, done, info
 
                 #gradients = self.grad_devide(gradients,node_num)
@@ -473,7 +485,6 @@ class DQNAgent:
                 grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
                 loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
                 gradients = list(list(zip(*gradients))[0])
-                print (gradients)
                 return q_val_est, gradients, loss, visit, next_obs, rwd, done, info
         else:
             env_initializer(env, obs)
@@ -485,7 +496,6 @@ class DQNAgent:
                 grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
                 loss, gradients = self.sess.run([mse,grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
                 gradients = list(list(zip(*gradients))[0])
-                print (gradients)
                 return rwd, gradients, loss, visit, next_obs, rwd, done, info
 
             dist = self.sess.run(self.q_dist, feed_dict={self.obs_ph:np.expand_dims(next_obs,0)})
@@ -497,7 +507,7 @@ class DQNAgent:
 
             for i in range(self.n_action):
                 if dist[0][i]>0:
-                    next_q_val, next_gradients, next_loss, v, _, _, _, _ = self.get_mct_q_val(env,next_obs,i,d-1)
+                    next_q_val, next_gradients, next_loss, v, _, _, _, _ = self.get_mct_q_val_all_grad(env,next_obs,i,d-1)
                     gradients = self.grad_sum(gradients,next_gradients)
                     loss += next_loss
                     q_val_list[i] = next_q_val
@@ -511,13 +521,12 @@ class DQNAgent:
             q_val_est = rwd + self.gamma * np.sum(q_val_list)
             mse = tf.square(q_val_est - self.q_predict[0][act])
             new_grad = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph).compute_gradients(mse,self.weights)
-            new_loss, new_gradients = self.sess.run([mse,new_grad], feed_dict={self.obs_ph:np.expand_dims(obs,0)})
-            new_gradients = list(list(zip(*gradients))[0])
+            new_loss, new_gradients = self.sess.run([mse,new_grad], feed_dict={self.obs_ph:np.expand_dims(obs,0),self.learning_rate_ph:self.learning_rate})
+            new_gradients = list(list(zip(*new_gradients))[0])
 
             gradients = self.grad_devide(gradients,node_num)
             gradients = self.grad_sum(gradients,new_gradients)
             loss = (1.0/node_num)*loss + new_loss
-            print (gradients)
 
             return q_val_est, gradients, loss, visit, next_obs, rwd, done, info
 
@@ -527,7 +536,7 @@ class DQNAgent:
         for gg in grad:
             g_m += np.sum(gg)
             g_size += gg.size
-        print(g_m/g_size)
+        return (g_m/g_size)
 
     def grad_sum(self,grad1,grad2):
         return [a+b for a, b in zip(grad1,grad2)]
@@ -536,7 +545,7 @@ class DQNAgent:
         return [g/val for g in grad]
     
     def mct_search(self,env,obs,act):
-        q_val, grad, loss, visit, next_obs, reward, done, info = self.get_mct_q_val_all_grad(env, obs, act, self.max_d)
+        q_val, grad, loss, visit, next_obs, reward, done, info = self.get_mct_q_val(env, obs, act, 1)
 
         return grad, loss, visit, next_obs, reward, done, info
 
@@ -607,7 +616,7 @@ class DQNAgent:
         return loss
 
 #env = pycar.env(visualize=True)
-env = gym.make('CartPole-v0')
+env = gym.make('CartPole-v1')
 obs_dim = env.observation_space.shape[0]
 act_dim = env.action_space.n
 
@@ -625,9 +634,9 @@ max_t = env.spec.max_episode_steps
 agent = DQNAgent(obs_dim,act_dim,memory_mode='PER',target_mode=cur_target, policy_mode=cur_policy,
                 restore=False, net_dir='argmax/iter_56000.ckpt') # memory_mode='PER',target_mode='DDQN'
 
-avg_return_list = deque(maxlen=10)
-avg_loss_list = deque(maxlen=10)
-avg_success_list = deque(maxlen=10)
+avg_return_list = deque(maxlen=100)
+avg_loss_list = deque(maxlen=100)
+avg_success_list = deque(maxlen=100)
 
 result_saver = []
 
@@ -638,17 +647,17 @@ print(cur_policy)
 print(cur_target)
 
 
-async_num=4
+async_num=64
 if cur_target=='MCT' or cur_target=='A3C':
     async_grad = [np.zeros(w.shape) for w in agent.weights]
     obs_set = []
     for n in range(async_num):
         obs_set.append(env.reset())
 
-    rwd_set=[0,0,0,0]
+    rwd_set=[0]*async_num
 
 vv=0
-for i in range(10000):
+for i in range(100000):
     obs = env.reset()
     done = False
     total_reward = 0
@@ -677,6 +686,7 @@ for i in range(10000):
                 action = agent.get_action(async_obs)
                 grad, loss, v, next_obs, reward, done, info = agent.mct_search(env,async_obs,action)
 
+                agent.grad_mean(grad)
                 async_grad = agent.grad_sum(async_grad,grad)
                 rwd_set[i % async_num]+=reward
                 vv += v
@@ -740,8 +750,8 @@ for i in range(10000):
         break
     
     if (i%10)==0:
-        #result_saver.append({'i':i,'loss':np.mean(avg_loss_list),'return':np.mean(avg_return_list),'success':np.mean(avg_success_list),'eps':agent.epsilon})
-        #np.save(cur_policy + '_result.npy',result_saver)
+        result_saver.append({'i':i,'visit':vv,'loss':np.mean(avg_loss_list),'return':np.mean(avg_return_list),'success':np.mean(avg_success_list),'eps':agent.epsilon})
+        np.save(cur_policy + '_result.npy',result_saver)
         timer.print_time()
         print('{} loss : {:.3f}, return : {:.3f}, success : {:.3f}, eps : {:.3f}'.format(i, np.mean(avg_loss_list), np.mean(avg_return_list), np.mean(avg_success_list), agent.epsilon))
 
